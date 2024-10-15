@@ -4,11 +4,16 @@ import axios from 'axios';
 const ImageUpload = () => {
   const [selectedFile, setSelectedFile] = useState(null);
   const [prediction, setPrediction] = useState(null);
+  const [selectedBox, setSelectedBox] = useState(null);
+  const [isDragging, setIsDragging] = useState(false);
+  const [isResizing, setIsResizing] = useState(false);
+  const [resizeDirection, setResizeDirection] = useState(null); // Track resizing direction
+  const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
   const canvasRef = useRef(null);
 
   const handleFileChange = (event) => {
     setSelectedFile(event.target.files[0]);
-    setPrediction(null); // Clear previous predictions
+    setPrediction(null); 
   };
 
   const handleUpload = async () => {
@@ -19,7 +24,7 @@ const ImageUpload = () => {
 
     const formData = new FormData();
     formData.append('image', selectedFile);
-    console.log(formData);
+    
     try {
       const response = await axios.post('http://127.0.0.1:5000/predict', formData, {
         headers: {
@@ -41,42 +46,137 @@ const ImageUpload = () => {
     img.src = URL.createObjectURL(selectedFile);
 
     img.onload = () => {
-      // Clear the canvas
       ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-      // Set the canvas dimensions to match the image
       canvas.width = img.width;
       canvas.height = img.height;
-
-      // Draw the image
       ctx.drawImage(img, 0, 0);
 
-      // Draw bounding boxes and labels
-      ctx.strokeStyle = 'red';
-      ctx.lineWidth = 2;
-      ctx.font = '18px Arial';
-      ctx.fillStyle = 'red';
-      
       prediction.boxes.forEach((box, index) => {
         const [x1, y1, x2, y2] = box;
+        
+        // Draw the box
+        ctx.strokeStyle = selectedBox === index ? 'blue' : 'red';
+        ctx.lineWidth = selectedBox === index ? 3 : 2;
         ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
 
-        // Draw label and coordinates above or below the box
-        const label = `${prediction.labels[index]} (${x1}, ${y1}, ${x2}, ${y2})`;
-        const textWidth = ctx.measureText(label).width;
-        const textHeight = parseInt(ctx.font, 10);
+        // Draw label
+        ctx.font = '18px Arial';
+        ctx.fillStyle = 'red';
+        ctx.fillText(prediction.labels[index], x1, y1 > 20 ? y1 - 5 : y1 + 20);
 
-        const textX = x1;
-        const textY = y1 - 10 > textHeight ? y1 - 10 : y1 + textHeight + 10;
-        
-        ctx.fillText(label, textX, textY);
+        // Draw resize handles
+        if (selectedBox === index) {
+          ctx.fillStyle = 'blue';
+          const handleSize = 6;
+          ctx.fillRect(x1 - handleSize, y1 - handleSize, handleSize * 2, handleSize * 2); // Top-left
+          ctx.fillRect(x2 - handleSize, y2 - handleSize, handleSize * 2, handleSize * 2); // Bottom-right
+        }
       });
     };
   };
 
+  const isNearCorner = (x, y, box) => {
+    const [x1, y1, x2, y2] = box;
+    const handleSize = 6;
+
+    // Check if near the top-left corner
+    if (Math.abs(x - x1) <= handleSize && Math.abs(y - y1) <= handleSize) return 'top-left';
+
+    // Check if near the bottom-right corner
+    if (Math.abs(x - x2) <= handleSize && Math.abs(y - y2) <= handleSize) return 'bottom-right';
+
+    return null;
+  };
+
+  const handleMouseDown = (event) => {
+    const canvas = canvasRef.current;
+    const rect = canvas.getBoundingClientRect();
+    const x = event.clientX - rect.left;
+    const y = event.clientY - rect.top;
+
+    if (selectedBox !== null) {
+      const direction = isNearCorner(x, y, prediction.boxes[selectedBox]);
+      if (direction) {
+        setResizeDirection(direction);
+        setIsResizing(true);
+        setMousePos({ x, y });
+        return;
+      }
+    }
+
+    // Check if a box is clicked for dragging
+    prediction.boxes.forEach((box, index) => {
+      const [x1, y1, x2, y2] = box;
+      if (x > x1 && x < x2 && y > y1 && y < y2) {
+        setSelectedBox(index);
+        setMousePos({ x, y });
+        setIsDragging(true);
+      }
+    });
+  };
+  const handleDeleteBox = () => {
+    if (selectedBox === null) return;
+  
+    setPrediction((prevPrediction) => {
+      const updatedBoxes = prevPrediction.boxes.filter((_, index) => index !== selectedBox);
+      const updatedLabels = prevPrediction.labels.filter((_, index) => index !== selectedBox);
+      
+      return {
+        ...prevPrediction,
+        boxes: updatedBoxes,
+        labels: updatedLabels,
+      };
+    });
+  
+    setSelectedBox(null);
+  };
+  
+
+  const handleMouseMove = (event) => {
+    const canvas = canvasRef.current;
+    const rect = canvas.getBoundingClientRect();
+    const x = event.clientX - rect.left;
+    const y = event.clientY - rect.top;
+    const dx = x - mousePos.x;
+    const dy = y - mousePos.y;
+
+    if (isDragging && selectedBox !== null) {
+      setPrediction((prevPrediction) => {
+        const updatedBoxes = [...prevPrediction.boxes];
+        const [x1, y1, x2, y2] = updatedBoxes[selectedBox];
+        updatedBoxes[selectedBox] = [x1 + dx, y1 + dy, x2 + dx, y2 + dy];
+        return { ...prevPrediction, boxes: updatedBoxes };
+      });
+    } else if (isResizing && selectedBox !== null && resizeDirection) {
+      setPrediction((prevPrediction) => {
+        const updatedBoxes = [...prevPrediction.boxes];
+        let [x1, y1, x2, y2] = updatedBoxes[selectedBox];
+        
+        if (resizeDirection === 'top-left') {
+          x1 += dx;
+          y1 += dy;
+        } else if (resizeDirection === 'bottom-right') {
+          x2 += dx;
+          y2 += dy;
+        }
+        
+        updatedBoxes[selectedBox] = [x1, y1, x2, y2];
+        return { ...prevPrediction, boxes: updatedBoxes };
+      });
+    }
+
+    setMousePos({ x, y });
+  };
+
+  const handleMouseUp = () => {
+    setIsDragging(false);
+    setIsResizing(false);
+    setResizeDirection(null);
+  };
+
   useEffect(() => {
     drawBoundingBoxes();
-  }, [prediction]);
+  }, [prediction, selectedBox]);
 
   return (
     <div style={{ padding: '20px' }}>
@@ -86,8 +186,19 @@ const ImageUpload = () => {
 
       {selectedFile && (
         <div style={{ marginTop: '20px', position: 'relative' }}>
-          <canvas ref={canvasRef} style={{ maxWidth: '50%' }} />
+          <canvas
+            ref={canvasRef}
+            style={{ maxWidth: '50%' }}
+            onMouseDown={handleMouseDown}
+            onMouseMove={handleMouseMove}
+            onMouseUp={handleMouseUp}
+          />
         </div>
+      )}
+      {selectedBox !== null && (
+        <button onClick={handleDeleteBox} style={{ marginTop: '10px' }}>
+          Delete Selected Box
+        </button>
       )}
 
       {prediction && (
@@ -102,6 +213,7 @@ const ImageUpload = () => {
           </ul>
         </div>
       )}
+      
     </div>
   );
 };
