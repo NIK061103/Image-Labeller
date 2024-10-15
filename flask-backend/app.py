@@ -24,8 +24,8 @@ db = client['image_detection_db']
 collection = db['image_details']
 
 # Load YOLOv5 model (or another model)
-# model = torch.hub.load('ultralytics/yolov11', 'yolov11s', pretrained=True)
-model = YOLO("/Users/nikhilrajput/Downloads/HackathonP1/image-upload-app/flask-backend/yolo11s (2).pt")
+model = torch.hub.load('ultralytics/yolov5', 'yolov5s', pretrained=True)
+# model = YOLO("/Users/nikhilrajput/Downloads/HackathonP1/image-upload-app/flask-backend/yolov5s.pt")
 model.eval()
 
 def detect_objects(image_path):
@@ -73,6 +73,20 @@ def predict():
         "boxes": boxes,
         "image_id": str(result.inserted_id)
     })
+
+@app.route('/update-boxes/<image_id>', methods=['POST'])
+def update_boxes(image_id):
+    data = request.json
+    updated_boxes = data.get('boxes')
+
+    # Update the bounding boxes in MongoDB
+    collection.update_one(
+        {'_id': ObjectId(image_id)},
+        {'$set': {'boxes': updated_boxes}}
+    )
+
+    return jsonify({"success": True}), 200
+
 
 if __name__ == '__main__':
     app.run(port=5000, debug=True)
